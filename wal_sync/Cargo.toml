@@ -1,0 +1,36 @@
+[package]
+name = "wal_sync"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Async runtime
+tokio = { workspace = true }
+tokio-postgres = { version = "0.7", features = ["with-chrono-0_4", "with-serde_json-1"] }
+postgres-protocol = "0.6"
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Postgres types
+postgres-types = { version = "0.2", features = ["derive", "with-chrono-0_4", "with-serde_json-1"] }
+bytes = "1.8"
+
+# Error handling
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+# Utilities
+async-trait = { workspace = true }
+futures = { workspace = true }
+chrono = { workspace = true }
+
+# For the cruding integration
+cruding_core = { workspace = true }
+
+[dev-dependencies]
+tracing-subscriber = { workspace = true }
