@@ -12,6 +12,7 @@ postgres-protocol = "0.6"
 # Serialization
 serde = { workspace = true }
 serde_json = { workspace = true }
+derive = { workspace = true }
 
 # Postgres types
 postgres-types = { version = "0.2", features = ["derive", "with-chrono-0_4", "with-serde_json-1"] }

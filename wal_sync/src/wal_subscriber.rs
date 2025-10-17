@@ -2,38 +2,51 @@ use crate::{
     error::{WalError, WalResult},
     wal_event::{RawWalEvent, WalEventHandler},
 };
+use derivative::Derivative;
+
 use bytes::{Buf, Bytes};
 use futures::StreamExt;
 use std::{collections::HashMap, sync::Arc};
 use tokio_postgres::{Client, Config, NoTls};
 
-/// Configuration for the WAL subscriber
+#[derive(Derivative)]
+#[derivative(Debug, Clone)]
+pub struct DatabaseCredentials {
+    #[derivative(Debug = "ignore")]
+    pub host: String,
+    #[derivative(Debug = "ignore")]
+    pub password: String,
+    pub db_name: String,
+}
+
+impl DatabaseCredentials {
+    fn new() -> Self {
+        Self {
+            host: "".to_string(),
+            password: "".to_string(),
+            db_name: "".to_string()
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct WalSubscriberConfig {
     /// Database connection string (must include replication=database parameter)
     /// Example: "host=localhost user=myuser password=mypass dbname=mydb replication=database"
-    pub connection_string: String,
-
-    /// Name of the replication slot to use
+    pub database_creds: DatabaseCredentials,
     pub slot_name: String,
-
-    /// Name of the publication to subscribe to
     pub publication_name: String,
-
-    /// Protocol version (use "1" for pgoutput)
+    /// use "1" for pgoutput
     pub protocol_version: String,
-
-    /// Whether to create the publication if it doesn't exist
     pub create_publication: bool,
-
-    /// Tables to include in the publication (if creating)
+    /// If creating publication ourselves
     pub publication_tables: Vec<String>,
 }
 
 impl Default for WalSubscriberConfig {
     fn default() -> Self {
         Self {
-            connection_string: String::new(),
+            database_creds: DatabaseCredentials::new(),
             slot_name: "cruding_wal_slot".to_string(),
             publication_name: "cruding_publication".to_string(),
             protocol_version: "1".to_string(),
@@ -43,14 +56,12 @@ impl Default for WalSubscriberConfig {
     }
 }
 
-/// Main WAL subscriber that connects to Postgres and streams replication events
 pub struct WalSubscriber {
     config: WalSubscriberConfig,
     handlers: HashMap<String, Arc<dyn WalEventHandler>>,
 }
 
 impl WalSubscriber {
-    /// Create a new WAL subscriber with the given configuration
     pub fn new(config: WalSubscriberConfig) -> Self {
         Self {
             config,
@@ -58,35 +69,24 @@ impl WalSubscriber {
         }
     }
 
-    /// Register a handler for a specific table
     pub fn register_handler(&mut self, handler: Arc<dyn WalEventHandler>) {
         let table_name = handler.table_name().to_string();
         tracing::info!("Registering WAL handler for table: {}", table_name);
         self.handlers.insert(table_name, handler);
     }
 
-    /// Start the WAL subscriber (this will run indefinitely)
     pub async fn start(&mut self) -> WalResult<()> {
         tracing::info!("Starting WAL subscriber");
-
-        // Connect to database
         let (client, connection) = self.connect_to_db().await?;
-
-        // Spawn connection handler
         tokio::spawn(async move {
             if let Err(e) = connection.await {
                 tracing::error!("Connection error: {}", e);
             }
         });
-
-        // Setup replication
         self.setup_replication(&client).await?;
-
-        // Start streaming
         self.stream_wal(client).await
     }
 
-    /// Connect to the database with replication mode
     async fn connect_to_db(
         &self,
     ) -> WalResult<(
@@ -107,7 +107,6 @@ impl WalSubscriber {
         Ok((client, connection))
     }
 
-    /// Setup replication slot and publication
     async fn setup_replication(&mut self, client: &Client) -> WalResult<()> {
         // Create publication if needed
         if self.config.create_publication && !self.config.publication_tables.is_empty() {
@@ -120,7 +119,6 @@ impl WalSubscriber {
         Ok(())
     }
 
-    /// Create the publication for the specified tables
     async fn create_publication(&self, client: &Client) -> WalResult<()> {
         let tables = self.config.publication_tables.join(", ");
         let query = format!(
@@ -150,7 +148,6 @@ impl WalSubscriber {
         }
     }
 
-    /// Create the replication slot if it doesn't exist
     async fn create_replication_slot(&self, client: &Client) -> WalResult<()> {
         let query = format!(
             "CREATE_REPLICATION_SLOT {} LOGICAL pgoutput NOEXPORT_SNAPSHOT",
@@ -165,7 +162,6 @@ impl WalSubscriber {
                 Ok(())
             }
             Err(e) => {
-                // If slot already exists, that's fine
                 if e.to_string().contains("already exists") {
                     tracing::info!("Replication slot already exists");
                     Ok(())
@@ -179,9 +175,7 @@ impl WalSubscriber {
         }
     }
 
-    /// Start streaming WAL events
     async fn stream_wal(&mut self, client: Client) -> WalResult<()> {
-        // Build the START_REPLICATION command
         let query = format!(
             r#"START_REPLICATION SLOT {} LOGICAL 0/0 (proto_version '{}', publication_names '{}')"#,
             self.config.slot_name, self.config.protocol_version, self.config.publication_name
@@ -189,7 +183,6 @@ impl WalSubscriber {
 
         tracing::info!("Starting replication stream");
 
-        // Use copy_out to get the replication stream
         let copy_stream = client
             .copy_out(&query)
             .await
@@ -199,7 +192,6 @@ impl WalSubscriber {
 
         tracing::info!("Connected to replication stream, waiting for events...");
 
-        // Process messages as they arrive
         while let Some(result) = copy_stream.next().await {
             match result {
                 Ok(bytes) => {
@@ -218,11 +210,7 @@ impl WalSubscriber {
         Ok(())
     }
 
-    /// Process a replication message
     async fn process_replication_message(&mut self, data: &Bytes) -> WalResult<()> {
-        // Parse the replication message format
-        // Format: message_type (u8) + data
-        
         if data.is_empty() {
             return Ok(());
         }
@@ -254,7 +242,6 @@ impl WalSubscriber {
         }
     }
 
-    /// Process WAL data (logical replication messages)
     async fn process_wal_data(&mut self, data: &[u8]) -> WalResult<()> {
         if data.is_empty() {
             return Ok(());
@@ -266,29 +253,23 @@ impl WalSubscriber {
 
         match message_type {
             'B' => {
-                // Begin transaction
                 tracing::debug!("Transaction begin");
                 Ok(())
             }
             'C' => {
-                // Commit transaction
                 tracing::debug!("Transaction commit");
                 Ok(())
             }
             'R' => {
-                // Relation message (table metadata)
                 self.parse_relation_message(&data[1..]).await
             }
             'I' => {
-                // Insert message
                 self.parse_insert_message(&data[1..]).await
             }
             'U' => {
-                // Update message  
                 self.parse_update_message(&data[1..]).await
             }
             'D' => {
-                // Delete message
                 self.parse_delete_message(&data[1..]).await
             }
             _ => {
@@ -298,7 +279,6 @@ impl WalSubscriber {
         }
     }
 
-    /// Parse relation (table metadata) message
     async fn parse_relation_message(&mut self, _data: &[u8]) -> WalResult<()> {
         // This is a simplified parser
         // In production, use postgres_protocol::message::backend::LogicalReplicationMessage
@@ -310,7 +290,6 @@ impl WalSubscriber {
         Ok(())
     }
 
-    /// Parse insert message
     async fn parse_insert_message(&mut self, _data: &[u8]) -> WalResult<()> {
         tracing::info!("📨 Received INSERT event");
         
@@ -326,13 +305,11 @@ impl WalSubscriber {
         Ok(())
     }
 
-    /// Parse delete message
     async fn parse_delete_message(&mut self, _data: &[u8]) -> WalResult<()> {
         tracing::info!("📨 Received DELETE event");
         Ok(())
     }
 
-    /// Dispatch an event to the appropriate handler
     async fn _dispatch_event(&self, event: RawWalEvent) -> WalResult<()> {
         if let Some(handler) = self.handlers.get(&event.table_name) {
             tracing::debug!(
