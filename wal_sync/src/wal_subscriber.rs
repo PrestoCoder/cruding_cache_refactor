@@ -93,11 +93,11 @@ impl WalSubscriber {
         Client,
         impl std::future::Future<Output = Result<(), tokio_postgres::Error>>,
     )> {
-        tracing::info!("Connecting to database: {}", self.config.connection_string);
+        tracing::info!("Connecting to database: {}", self.config.database_creds.db_name);
 
         let config: Config = self
             .config
-            .connection_string
+            .database_creds
             .parse()
             .map_err(|e| WalError::ConfigError(format!("Invalid connection string: {}", e)))?;
 
