@@ -251,7 +251,7 @@ impl WalSubscriber {
         }
     }
 
-    async fn process_wal_data(&mut self, data: &[u8]) -> WalResult<()> {
+    pub async fn process_wal_data(&mut self, data: &[u8]) -> WalResult<()> {
         if data.is_empty() {
             return Ok(());
         }
@@ -371,12 +371,26 @@ impl WalSubscriber {
 
         let old_tuple = match tuple_type {
             'O' | 'K' => {
+                // Parse old tuple
                 let tuple_data = parse_tuple(&data[cursor..], relation.columns.len())?;
                 let tuple_len = calculate_tuple_length(&data[cursor..], relation.columns.len())?;
                 cursor += tuple_len;
+                
+                // After old tuple, we expect 'N' for new tuple
+                if data[cursor] as char != 'N' {
+                    return Err(WalError::DecodingError(
+                        "Expected 'N' for new tuple in UPDATE".to_string(),
+                    ));
+                }
+                cursor += 1; // Consume the 'N'
+                
                 Some(tuple_data)
             }
-            'N' => None,
+            'N' => {
+                // No old tuple, 'N' was already consumed above
+                // Cursor is now positioned at the start of new tuple data
+                None
+            }
             _ => {
                 return Err(WalError::DecodingError(format!(
                     "Unexpected tuple type: '{}'",
@@ -385,13 +399,7 @@ impl WalSubscriber {
             }
         };
 
-        if data[cursor] as char != 'N' {
-            return Err(WalError::DecodingError(
-                "Expected 'N' for new tuple in UPDATE".to_string(),
-            ));
-        }
-        cursor += 1;
-
+        // Parse new tuple (cursor is already positioned correctly)
         let new_tuple = parse_tuple(&data[cursor..], relation.columns.len())?;
 
         let event = RawWalEvent {
@@ -476,7 +484,7 @@ fn _read_u8(data: &[u8], cursor: &mut usize) -> WalResult<u8> {
     Ok(value)
 }
 
-fn read_u16(data: &[u8], cursor: &mut usize) -> WalResult<u16> {
+pub fn read_u16(data: &[u8], cursor: &mut usize) -> WalResult<u16> {
     if *cursor + 2 > data.len() {
         return Err(WalError::DecodingError("Unexpected end of data".to_string()));
     }
@@ -485,7 +493,7 @@ fn read_u16(data: &[u8], cursor: &mut usize) -> WalResult<u16> {
     Ok(value)
 }
 
-fn read_u32(data: &[u8], cursor: &mut usize) -> WalResult<u32> {
+pub fn read_u32(data: &[u8], cursor: &mut usize) -> WalResult<u32> {
     if *cursor + 4 > data.len() {
         return Err(WalError::DecodingError("Unexpected end of data".to_string()));
     }
@@ -499,7 +507,7 @@ fn read_u32(data: &[u8], cursor: &mut usize) -> WalResult<u32> {
     Ok(value)
 }
 
-fn read_i32(data: &[u8], cursor: &mut usize) -> WalResult<i32> {
+pub fn read_i32(data: &[u8], cursor: &mut usize) -> WalResult<i32> {
     if *cursor + 4 > data.len() {
         return Err(WalError::DecodingError("Unexpected end of data".to_string()));
     }
@@ -513,7 +521,7 @@ fn read_i32(data: &[u8], cursor: &mut usize) -> WalResult<i32> {
     Ok(value)
 }
 
-fn read_string(data: &[u8], cursor: &mut usize) -> WalResult<String> {
+pub fn read_string(data: &[u8], cursor: &mut usize) -> WalResult<String> {
     let start = *cursor;
     while *cursor < data.len() && data[*cursor] != 0 {
         *cursor += 1;
@@ -530,7 +538,7 @@ fn read_string(data: &[u8], cursor: &mut usize) -> WalResult<String> {
     Ok(string)
 }
 
-fn parse_tuple(data: &[u8], num_columns: usize) -> WalResult<Vec<u8>> {
+pub fn parse_tuple(data: &[u8], num_columns: usize) -> WalResult<Vec<u8>> {
     let mut cursor = 0;
     let num_cols = read_u16(data, &mut cursor)?;
 
@@ -575,7 +583,7 @@ fn parse_tuple(data: &[u8], num_columns: usize) -> WalResult<Vec<u8>> {
     Ok(result)
 }
 
-fn calculate_tuple_length(data: &[u8], num_columns: usize) -> WalResult<usize> {
+pub fn calculate_tuple_length(data: &[u8], num_columns: usize) -> WalResult<usize> {
     let mut cursor = 0;
     let num_cols = read_u16(data, &mut cursor)?;
 
@@ -608,3 +616,4 @@ fn calculate_tuple_length(data: &[u8], num_columns: usize) -> WalResult<usize> {
 
     Ok(cursor)
 }
+

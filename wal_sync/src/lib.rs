@@ -57,8 +57,11 @@ pub mod wal_event;
 pub mod wal_subscriber;
 
 pub use error::{WalError, WalResult};
-pub use tuple_parser::TupleParser;
+pub use tuple_parser::{TupleParser};
 pub use wal_event::{
     ColumnInfo, RawWalEvent, TransactionEvent, TupleValue, WalEventHandler, WalOperation,
 };
-pub use wal_subscriber::{WalSubscriber, WalSubscriberConfig};
+pub use wal_subscriber::{WalSubscriber, read_u16, read_u32, read_i32, read_string,
+    parse_tuple, calculate_tuple_length,
+    DatabaseCredentials, WalSubscriberConfig,
+};
