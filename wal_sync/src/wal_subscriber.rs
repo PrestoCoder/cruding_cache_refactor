@@ -2,44 +2,45 @@ use crate::{
     error::{WalError, WalResult},
     wal_event::{RawWalEvent, WalEventHandler},
 };
-use derivative::Derivative;
-
 use bytes::{Buf, Bytes};
 use futures::StreamExt;
 use std::{collections::HashMap, sync::Arc};
 use tokio_postgres::{Client, Config, NoTls};
 
-#[derive(Derivative)]
-#[derivative(Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct DatabaseCredentials {
-    #[derivative(Debug = "ignore")]
     pub host: String,
-    #[derivative(Debug = "ignore")]
+    pub user: String,
     pub password: String,
     pub db_name: String,
 }
 
 impl DatabaseCredentials {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
-            host: "".to_string(),
+            host: "localhost".to_string(),
+            user: "postgres".to_string(),
             password: "".to_string(),
-            db_name: "".to_string()
+            db_name: "".to_string(),
         }
+    }
+
+    pub fn to_connection_string(&self) -> String {
+        format!(
+            "host={} user={} password={} dbname={} replication=database",
+            self.host, self.user, self.password, self.db_name
+        )
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct WalSubscriberConfig {
-    /// Database connection string (must include replication=database parameter)
-    /// Example: "host=localhost user=myuser password=mypass dbname=mydb replication=database"
     pub database_creds: DatabaseCredentials,
     pub slot_name: String,
     pub publication_name: String,
-    /// use "1" for pgoutput
+    /// Protocol version (use "1" for pgoutput)
     pub protocol_version: String,
     pub create_publication: bool,
-    /// If creating publication ourselves
     pub publication_tables: Vec<String>,
 }
 
@@ -77,12 +78,15 @@ impl WalSubscriber {
 
     pub async fn start(&mut self) -> WalResult<()> {
         tracing::info!("Starting WAL subscriber");
+
         let (client, connection) = self.connect_to_db().await?;
+
         tokio::spawn(async move {
             if let Err(e) = connection.await {
                 tracing::error!("Connection error: {}", e);
             }
         });
+
         self.setup_replication(&client).await?;
         self.stream_wal(client).await
     }
@@ -93,13 +97,17 @@ impl WalSubscriber {
         Client,
         impl std::future::Future<Output = Result<(), tokio_postgres::Error>>,
     )> {
-        tracing::info!("Connecting to database: {}", self.config.database_creds.db_name);
+        tracing::info!(
+            "Connecting to database: {} at {}",
+            self.config.database_creds.db_name,
+            self.config.database_creds.host
+        );
 
-        let config: Config = self
-            .config
-            .database_creds
-            .parse()
-            .map_err(|e| WalError::ConfigError(format!("Invalid connection string: {}", e)))?;
+        let connection_string = self.config.database_creds.to_connection_string();
+
+        let config: Config = connection_string.parse().map_err(|e| {
+            WalError::ConfigError(format!("Invalid connection string: {}", e))
+        })?;
 
         let (client, connection) = config.connect(NoTls).await?;
 
@@ -108,12 +116,10 @@ impl WalSubscriber {
     }
 
     async fn setup_replication(&mut self, client: &Client) -> WalResult<()> {
-        // Create publication if needed
         if self.config.create_publication && !self.config.publication_tables.is_empty() {
             self.create_publication(client).await?;
         }
 
-        // Create replication slot if it doesn't exist
         self.create_replication_slot(client).await?;
 
         Ok(())
@@ -134,7 +140,6 @@ impl WalSubscriber {
                 Ok(())
             }
             Err(e) => {
-                // If publication already exists, that's fine
                 if e.to_string().contains("already exists") {
                     tracing::info!("Publication already exists");
                     Ok(())
@@ -211,6 +216,8 @@ impl WalSubscriber {
     }
 
     async fn process_replication_message(&mut self, data: &Bytes) -> WalResult<()> {
+        // Format: message_type (u8) + data
+        
         if data.is_empty() {
             return Ok(());
         }
@@ -242,12 +249,12 @@ impl WalSubscriber {
         }
     }
 
+    /// Process WAL data (logical replication messages)
     async fn process_wal_data(&mut self, data: &[u8]) -> WalResult<()> {
         if data.is_empty() {
             return Ok(());
         }
 
-        // Parse logical replication message
         // This is a simplified parser - in production you'd use postgres-protocol
         let message_type = data[0] as char;
 
@@ -279,27 +286,18 @@ impl WalSubscriber {
         }
     }
 
+
     async fn parse_relation_message(&mut self, _data: &[u8]) -> WalResult<()> {
-        // This is a simplified parser
-        // In production, use postgres_protocol::message::backend::LogicalReplicationMessage
-        
         tracing::debug!("Received relation message (table metadata)");
-        
-        // For now, just acknowledge we got it
-        // Full implementation would parse relation ID, schema, table name, columns
         Ok(())
     }
 
     async fn parse_insert_message(&mut self, _data: &[u8]) -> WalResult<()> {
         tracing::info!("📨 Received INSERT event");
         
-        // Simplified: create a dummy event
-        // Full implementation would parse the actual data
-        
         Ok(())
     }
 
-    /// Parse update message
     async fn parse_update_message(&mut self, _data: &[u8]) -> WalResult<()> {
         tracing::info!("📨 Received UPDATE event");
         Ok(())
