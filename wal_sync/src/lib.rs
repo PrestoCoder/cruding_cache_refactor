@@ -62,21 +62,3 @@ pub use wal_event::{
     ColumnInfo, RawWalEvent, TransactionEvent, TupleValue, WalEventHandler, WalOperation,
 };
 pub use wal_subscriber::{WalSubscriber, WalSubscriberConfig};
-
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-
-//     #[test]
-//     fn test_config_creation() {
-//         let config = WalSubscriberConfig {
-//             connection_string: "host=localhost".to_string(),
-//             slot_name: "test_slot".to_string(),
-//             publication_name: "test_pub".to_string(),
-//             ..Default::default()
-//         };
-
-//         assert_eq!(config.slot_name, "test_slot");
-//         assert_eq!(config.publication_name, "test_pub");
-//     }
-// }
