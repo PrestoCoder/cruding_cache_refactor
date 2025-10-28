@@ -19,7 +19,7 @@ env:
 
 jobs:
   fmt:
-    name: Format check
+    name: Fmt
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
